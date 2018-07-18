@@ -12,6 +12,9 @@ class RNNModel(nn.Module):
         self.encoder = nn.Embedding(ntoken, ninp)
         if rnn_type in ['GRU']:
             self.rnn = getattr(nn, rnn_type)(ninp, nhid, nlayers, dropout=dropout)
+        elif rnn_type in ['Sparse_LSTM']:
+            print("Using Sparse LSTM")
+            self.rnn = bb.LSTM(bb.SparseLSTMCell, ninp, nhid, nlayers, dropout=dropout)
         elif rnn_type in ['LSTM']:
             self.rnn = bb.LSTM(bb.LSTMCell, ninp, nhid, nlayers, dropout=dropout)
         else:
