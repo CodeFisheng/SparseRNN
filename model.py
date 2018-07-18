@@ -13,7 +13,7 @@ class RNNModel(nn.Module):
         if rnn_type in ['GRU']:
             self.rnn = getattr(nn, rnn_type)(ninp, nhid, nlayers, dropout=dropout)
         elif rnn_type in ['LSTM']:
-            self.rnn = bb.LSTM(ninp, nhid, nlayers, dropout=dropout)
+            self.rnn = bb.LSTM(bb.LSTMCell, ninp, nhid, nlayers, dropout=dropout)
         else:
             try:
                 nonlinearity = {'RNN_TANH': 'tanh', 'RNN_RELU': 'relu'}[rnn_type]

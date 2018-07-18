@@ -3,7 +3,77 @@ import math
 import torch
 from torch import nn
 from torch.autograd import Variable
-from torch.nn import functional, init
+from torch.nn import init
+from torch.autograd.function import InplaceFunction
+import torch.nn.functional as F
+
+def my_mask(input, mask, p=0.5, training=False, inplace=False):
+    # p is the probability of each hidden neuron being dropped
+    return MyMaskLayer.apply(input, mask, p, training, inplace)
+
+class MyMaskLayer(InplaceFunction):
+
+    @staticmethod
+    def _make_mask(m, p):
+        return m.div_(p)
+
+    @classmethod
+    def forward(cls, ctx, input, mask, p, train=False, inplace=False):
+        assert input.size() == mask.size()
+        if p < 0 or p > 1:
+            raise ValueError("Drop probability has to be between 0 and 1, "
+                            "but got {}".format(p))
+
+        ctx.p = p
+        ctx.train = train
+        ctx.inplace = inplace
+
+        if ctx.p == 0 or not ctx.train:
+            return input
+
+        if ctx.inplace:
+            ctx.mark_dirty(input)
+            output = input
+        else:
+            output = input.clone()
+
+        ctx.mask = mask
+        if ctx.p == 1:
+            ctx.mask.fill_(0)
+        # print('mask: ', ctx.mask)
+
+        output.mul_(ctx.mask)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        if ctx.p > 0 and ctx.train:
+            return grad_output.mul(Variable(ctx.mask)), None, None, None, None
+        else:
+            return grad_output, None, None, None, None
+
+def topk_mask_gen(x, top):
+    # print(x.size())
+    assert x.dim() == 2
+
+    # x: [mini-batch size, hidden size]
+    # extract mini-batch size m
+    m = x.size(0)
+    k = int(top * x.size(0) * x.size(1))
+    # k = int(top * x.size(0) * x.size(1) * x.size(2) * x.size(3))
+    # print('k: ', k)
+    mask = Variable(x.data, requires_grad=False)
+    mask = mask.abs()
+
+    # for sample_idx in range(m):
+    # approximately choose the top-k based on the first sample
+    mask_topk = torch.topk(mask.view(-1), k, sorted=False)
+    threshold = float(torch.min(mask_topk[0]))
+    mask = F.threshold(mask, threshold, 0)
+    # mask = mask.abs()
+    mask = torch.sign(mask)
+
+    return mask
 
 class LSTMCell(nn.Module):
 
@@ -27,6 +97,8 @@ class LSTMCell(nn.Module):
         else:
             self.register_parameter('bias', None)
         self.reset_parameters()
+
+        self.sparsity_ratio = 0.5
 
     def reset_parameters(self):
         """
@@ -63,8 +135,14 @@ class LSTMCell(nn.Module):
                       .expand(batch_size, *self.bias.size()))
         wh_b = torch.addmm(bias_batch, h_0, self.weight_hh)
         wi = torch.mm(input_, self.weight_ih)
-        f, i, o, g = torch.split(wh_b + wi,
-                                 split_size=self.hidden_size, dim=1)
+        net = wh_b + wi
+        # modified by Liu
+        mask = topk_mask_gen(net, 1 - self.sparsity_ratio)
+        assert mask.size() == net.size()
+        # net = net * mask
+        net = my_mask(net, mask, training=True)
+
+        f, i, o, g = torch.split(net, split_size=self.hidden_size, dim=1)
         c_1 = torch.sigmoid(f) * c_0 + torch.sigmoid(i) * torch.tanh(g)
         h_1 = torch.sigmoid(o) * torch.tanh(c_1)
         return h_1, c_1
@@ -111,13 +189,10 @@ class LSTM(nn.Module):
         max_time = input_.size(0)
         output = []
         for time in range(max_time):
-            if isinstance(cell, BNLSTMCell):
-                h_next, c_next = cell(input_=input_[time], hx=hx, time=time)
-            else:
-                h_next, c_next = cell(input_=input_[time], hx=hx)
-            mask = (time < length).float().unsqueeze(1).expand_as(h_next)
-            h_next = h_next*mask + hx[0]*(1 - mask)
-            c_next = c_next*mask + hx[1]*(1 - mask)
+            h_next, c_next = cell(input_=input_[time], hx=hx)
+            # mask = (time < length).float().unsqueeze(1).expand_as(h_next)
+            # h_next = h_next*mask + hx[0]*(1 - mask)
+            # c_next = c_next*mask + hx[1]*(1 - mask)
             hx_next = (h_next, c_next)
             output.append(h_next)
             hx = hx_next
