@@ -6,7 +6,8 @@ import building_block as bb
 class RNNModel(nn.Module):
     """Container module with an encoder, a recurrent module, and a decoder."""
 
-    def __init__(self, rnn_type, ntoken, ninp, nhid, nlayers, dropout=0.5, tie_weights=False):
+    def __init__(self, rnn_type, ntoken, ninp, nhid, nlayers, dropout=0.5, 
+        tie_weights=False, sparsity_ratio=0.5):
         super(RNNModel, self).__init__()
         self.drop = nn.Dropout(dropout)
         self.encoder = nn.Embedding(ntoken, ninp)
@@ -14,7 +15,8 @@ class RNNModel(nn.Module):
             self.rnn = getattr(nn, rnn_type)(ninp, nhid, nlayers, dropout=dropout)
         elif rnn_type in ['Sparse_LSTM']:
             print("Using Sparse LSTM")
-            self.rnn = bb.LSTM(bb.SparseLSTMCell, ninp, nhid, nlayers, dropout=dropout)
+            self.rnn = bb.LSTM(bb.SparseLSTMCell, ninp, nhid, nlayers, dropout=dropout,
+                sparsity_ratio=sparsity_ratio)
         elif rnn_type in ['LSTM']:
             self.rnn = bb.LSTM(bb.LSTMCell, ninp, nhid, nlayers, dropout=dropout)
         else:

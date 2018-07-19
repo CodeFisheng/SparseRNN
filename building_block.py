@@ -79,7 +79,7 @@ class SparseLSTMCell(nn.Module):
 
     """A basic LSTM cell."""
 
-    def __init__(self, input_size, hidden_size, use_bias=True):
+    def __init__(self, input_size, hidden_size, use_bias=True, sparsity_ratio=0.5):
         """
         Most parts are copied from torch.nn.SparseLSTMCell.
         """
@@ -98,7 +98,7 @@ class SparseLSTMCell(nn.Module):
             self.register_parameter('bias', None)
         self.reset_parameters()
 
-        self.sparsity_ratio = 0.5
+        self.sparsity_ratio = sparsity_ratio
 
     def reset_parameters(self):
         """
