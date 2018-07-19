@@ -1,6 +1,7 @@
 import argparse
 import time
 import math
+import json
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
@@ -43,6 +44,9 @@ parser.add_argument('--log-interval', type=int, default=200, metavar='N',
                     help='report interval')
 parser.add_argument('--save', type=str,  default='model.pt',
                     help='path to save the final model')
+parser.add_argument('--plot', default='plot.log', type=str,
+                    help='Specify the filename of plot')
+
 args = parser.parse_args()
 
 # Set the random seed manually for reproducibility.
@@ -52,6 +56,26 @@ if torch.cuda.is_available():
         print("WARNING: You have a CUDA device, so you should probably run with --cuda")
     else:
         torch.cuda.manual_seed(args.seed)
+
+###############################################################################
+# helper functions
+###############################################################################
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
 
 ###############################################################################
 # Load data
@@ -125,6 +149,7 @@ def train():
     # Turn on training mode which enables dropout.
     model.train()
     total_loss = 0
+    batch_loss = AverageMeter()
     start_time = time.time()
     ntokens = len(corpus.dictionary)
     hidden = model.init_hidden(args.batch_size)
@@ -144,6 +169,7 @@ def train():
             p.data.add_(-lr, p.grad.data)
 
         total_loss += loss.data
+        batch_loss.update(loss.data[0], data.size(0)) 
 
         if batch % args.log_interval == 0 and batch > 0:
             cur_loss = total_loss[0] / args.log_interval
@@ -154,22 +180,29 @@ def train():
                 elapsed * 1000 / args.log_interval, cur_loss, math.exp(cur_loss)))
             total_loss = 0
             start_time = time.time()
+    return batch_loss.avg
+
 
 # Loop over epochs.
 lr = args.lr
 best_val_loss = None
 
+loss_plt = {'train': [], 'val': [], 'test': []}
+
 # At any point you can hit Ctrl + C to break out of training early.
 try:
     for epoch in range(1, args.epochs+1):
         epoch_start_time = time.time()
-        train()
+        train_loss = train()
         val_loss = evaluate(val_data)
+        loss_plt['train'].append(round(train_loss, 3))
+        loss_plt['val'].append(round(val_loss, 3))
         print('-' * 89)
         print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
                 'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
                                            val_loss, math.exp(val_loss)))
         print('-' * 89)
+
         # Save the model if the validation loss is the best we've seen so far.
         if not best_val_loss or val_loss < best_val_loss:
             with open(args.save, 'wb') as f:
@@ -182,13 +215,27 @@ except KeyboardInterrupt:
     print('-' * 89)
     print('Exiting from training early')
 
+f = open(args.plot, 'w')
+json.dump({'training loss': loss_plt['train'],
+       'validation loss': loss_plt['val']}, f)
+# json.dump({'training loss': loss_plt['train']}, f)
+f.close()
+
 # Load the best saved model.
 with open(args.save, 'rb') as f:
     model = torch.load(f)
 
 # Run on test data.
 test_loss = evaluate(test_data)
+loss_plt['test'].append(round(test_loss, 3))
 print('=' * 89)
 print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
     test_loss, math.exp(test_loss)))
 print('=' * 89)
+
+f = open(args.plot, 'w')
+json.dump({'train loss': loss_plt['train'],
+       'valid loss': loss_plt['val'],
+       'test loss': loss_plt['test']}, f)
+# json.dump({'training loss': loss_plt['train']}, f)
+f.close()
