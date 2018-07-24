@@ -106,13 +106,13 @@ class SparseLSTMCell(nn.Module):
         Recurrent Batch Normalization.
         """
 
-        # init.orthogonal(self.weight_ih.data)
-        # weight_hh_data = torch.eye(self.hidden_size)
-        # weight_hh_data = weight_hh_data.repeat(1, 4)
-        # self.weight_hh.data.set_(weight_hh_data)
+        init.orthogonal(self.weight_ih.data)
+        weight_hh_data = torch.eye(self.hidden_size)
+        weight_hh_data = weight_hh_data.repeat(1, 4)
+        self.weight_hh.data.set_(weight_hh_data)
         # # The bias is just set to zero vectors.
-        # if self.use_bias:
-        #     init.constant(self.bias.data, val=0)
+        if self.use_bias:
+            init.constant(self.bias.data, val=0)
         stdv = 1.0 / math.sqrt(self.hidden_size)
         for weight in self.parameters():
             weight.data.uniform_(-stdv, stdv)
@@ -174,6 +174,7 @@ class LSTMCell(nn.Module):
         else:
             self.register_parameter('bias', None)
         self.reset_parameters()
+        self.profiling = True
 
     def reset_parameters(self):
         """
@@ -181,13 +182,13 @@ class LSTMCell(nn.Module):
         Recurrent Batch Normalization.
         """
 
-        # init.orthogonal(self.weight_ih.data)
-        # weight_hh_data = torch.eye(self.hidden_size)
-        # weight_hh_data = weight_hh_data.repeat(1, 4)
-        # self.weight_hh.data.set_(weight_hh_data)
+        init.orthogonal(self.weight_ih.data)
+        weight_hh_data = torch.eye(self.hidden_size)
+        weight_hh_data = weight_hh_data.repeat(1, 4)
+        self.weight_hh.data.set_(weight_hh_data)
         # # The bias is just set to zero vectors.
-        # if self.use_bias:
-        #     init.constant(self.bias.data, val=0)
+        if self.use_bias:
+            init.constant(self.bias.data, val=0)
         stdv = 1.0 / math.sqrt(self.hidden_size)
         for weight in self.parameters():
             weight.data.uniform_(-stdv, stdv)
@@ -244,6 +245,8 @@ class LSTM(nn.Module):
         self.dropout_layer = nn.Dropout(dropout)
         self.reset_parameters()
 
+        self.profiling = True
+
     def get_cell(self, layer):
         return getattr(self, 'cell_{}'.format(layer))
 
@@ -292,4 +295,12 @@ class LSTM(nn.Module):
         output = layer_output
         h_n = torch.stack(h_n, 0)
         c_n = torch.stack(c_n, 0)
+
+        if self.profiling:
+        	print('input: ', input_.size())
+        	print('hx, hx: ', hx[0].size(), hx[1].size())
+        	print('output: ', output.size())
+        	print('h_n, c_n: ', h_n.size(), c_n.size())
+        	self.profiling = False
+
         return output, (h_n, c_n)
