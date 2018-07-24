@@ -11,13 +11,13 @@ class RNNModel(nn.Module):
         super(RNNModel, self).__init__()
         self.drop = nn.Dropout(dropout)
         self.encoder = nn.Embedding(ntoken, ninp)
-        if rnn_type in ['GRU']:
+        if rnn_type in ['LSTM', 'GRU']:
             self.rnn = getattr(nn, rnn_type)(ninp, nhid, nlayers, dropout=dropout)
-        elif rnn_type in ['Sparse_LSTM']:
+        elif rnn_type == 'Sparse_LSTM':
             print("Using Sparse LSTM")
             self.rnn = bb.LSTM(bb.SparseLSTMCell, ninp, nhid, nlayers, dropout=dropout,
                 sparsity_ratio=sparsity_ratio)
-        elif rnn_type in ['LSTM']:
+        elif rnn_type == 'MyLSTM':
             self.rnn = bb.LSTM(bb.LSTMCell, ninp, nhid, nlayers, dropout=dropout)
         else:
             try:
@@ -60,7 +60,7 @@ class RNNModel(nn.Module):
 
     def init_hidden(self, bsz):
         weight = next(self.parameters()).data
-        if self.rnn_type == 'LSTM':
+        if self.rnn_type in ['LSTM', 'Sparse_LSTM', 'MyLSTM']:
             return (Variable(weight.new(self.nlayers, bsz, self.nhid).zero_()),
                     Variable(weight.new(self.nlayers, bsz, self.nhid).zero_()))
         else:
