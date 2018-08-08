@@ -2,7 +2,7 @@
 import math
 import torch
 from torch import nn
-from torch.autograd import Variable
+# from torch.autograd import Variable
 from torch.nn import init
 from torch.autograd.function import InplaceFunction
 import torch.nn.functional as F
@@ -48,7 +48,7 @@ class MyMaskLayer(InplaceFunction):
     @staticmethod
     def backward(ctx, grad_output):
         if ctx.p > 0 and ctx.train:
-            return grad_output.mul(Variable(ctx.mask)), None, None, None, None
+            return grad_output.mul(ctx.mask), None, None, None, None
         else:
             return grad_output, None, None, None, None
 
@@ -62,7 +62,8 @@ def topk_mask_gen(x, top):
     k = int(top * x.size(0) * x.size(1))
     # k = int(top * x.size(0) * x.size(1) * x.size(2) * x.size(3))
     # print('k: ', k)
-    mask = Variable(x.data, requires_grad=False)
+    # mask = Variable(x.data, requires_grad=False)
+    mask = x.detach()
     mask = mask.abs()
 
     # for sample_idx in range(m):
@@ -75,147 +76,69 @@ def topk_mask_gen(x, top):
 
     return mask
 
-class SparseLSTMCell(nn.Module):
-
-    """A basic LSTM cell."""
-
-    def __init__(self, input_size, hidden_size, use_bias=True, sparsity_ratio=0.5):
-        """
-        Most parts are copied from torch.nn.SparseLSTMCell.
-        """
-
-        super(SparseLSTMCell, self).__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.use_bias = use_bias
-        self.weight_ih = nn.Parameter(
-            torch.FloatTensor(input_size, 4 * hidden_size))
-        self.weight_hh = nn.Parameter(
-            torch.FloatTensor(hidden_size, 4 * hidden_size))
-        if use_bias:
-            self.bias = nn.Parameter(torch.FloatTensor(4 * hidden_size))
-        else:
-            self.register_parameter('bias', None)
-        self.reset_parameters()
-
-        self.sparsity_ratio = sparsity_ratio
-
-    def reset_parameters(self):
-        """
-        Initialize parameters following the way proposed in 
-        Recurrent Batch Normalization.
-        """
-
-        init.orthogonal(self.weight_ih.data)
-        weight_hh_data = torch.eye(self.hidden_size)
-        weight_hh_data = weight_hh_data.repeat(1, 4)
-        self.weight_hh.data.set_(weight_hh_data)
-        # # The bias is just set to zero vectors.
-        if self.use_bias:
-            init.constant(self.bias.data, val=0)
-        stdv = 1.0 / math.sqrt(self.hidden_size)
-        for weight in self.parameters():
-            weight.data.uniform_(-stdv, stdv)
-
-    def forward(self, input_, hx):
-        """
-        Args:
-            input_: A (batch, input_size) tensor containing input
-                features.
-            hx: A tuple (h_0, c_0), which contains the initial hidden
-                and cell state, where the size of both states is
-                (batch, hidden_size).
-        Returns:
-            h_1, c_1: Tensors containing the next hidden and cell state.
-        """
-
-        h_0, c_0 = hx
-        batch_size = h_0.size(0)
-        bias_batch = (self.bias.unsqueeze(0)
-                      .expand(batch_size, *self.bias.size()))
-        wh_b = torch.addmm(bias_batch, h_0, self.weight_hh)
-        wi = torch.mm(input_, self.weight_ih)
-        net = wh_b + wi
-        # modified by Liu
-        mask = topk_mask_gen(net, 1 - self.sparsity_ratio)
-        assert mask.size() == net.size()
-        # net = net * mask
-        net = my_mask(net, mask, training=True)
-
-        f, i, o, g = torch.split(net, split_size=self.hidden_size, dim=1)
-        c_1 = torch.sigmoid(f) * c_0 + torch.sigmoid(i) * torch.tanh(g)
-        h_1 = torch.sigmoid(o) * torch.tanh(c_1)
-        return h_1, c_1
-
-    def __repr__(self):
-        s = '{name}({input_size}, {hidden_size})'
-        return s.format(name=self.__class__.__name__, **self.__dict__)
-
 
 class LSTMCell(nn.Module):
 
     """A basic LSTM cell."""
 
-    def __init__(self, input_size, hidden_size, use_bias=True):
-        """
-        Most parts are copied from torch.nn.LSTMCell.
-        """
-
+    def __init__(self, input_size, hidden_size, bias=True, sparsity_ratio=None):
         super(LSTMCell, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
-        self.use_bias = use_bias
-        self.weight_ih = nn.Parameter(
-            torch.FloatTensor(input_size, 4 * hidden_size))
-        self.weight_hh = nn.Parameter(
-            torch.FloatTensor(hidden_size, 4 * hidden_size))
-        if use_bias:
-            self.bias = nn.Parameter(torch.FloatTensor(4 * hidden_size))
+        self.bias = bias
+        self.weight_ih = nn.Parameter(torch.Tensor(4 * hidden_size, input_size))
+        self.weight_hh = nn.Parameter(torch.Tensor(4 * hidden_size, hidden_size))
+        if bias:
+            self.bias_ih = nn.Parameter(torch.Tensor(4 * hidden_size))
+            self.bias_hh = nn.Parameter(torch.Tensor(4 * hidden_size))
         else:
-            self.register_parameter('bias', None)
+            self.register_parameter('bias_ih', None)
+            self.register_parameter('bias_hh', None)
         self.reset_parameters()
-        self.profiling = True
+        self.sparsity_ratio = sparsity_ratio
 
     def reset_parameters(self):
-        """
-        Initialize parameters following the way proposed in 
-        Recurrent Batch Normalization.
-        """
-
-        init.orthogonal(self.weight_ih.data)
-        weight_hh_data = torch.eye(self.hidden_size)
-        weight_hh_data = weight_hh_data.repeat(1, 4)
-        self.weight_hh.data.set_(weight_hh_data)
-        # # The bias is just set to zero vectors.
-        if self.use_bias:
-            init.constant(self.bias.data, val=0)
         stdv = 1.0 / math.sqrt(self.hidden_size)
         for weight in self.parameters():
-            weight.data.uniform_(-stdv, stdv)
+            init.uniform_(weight, -stdv, stdv)
 
-    def forward(self, input_, hx):
-        """
-        Args:
-            input_: A (batch, input_size) tensor containing input
-                features.
-            hx: A tuple (h_0, c_0), which contains the initial hidden
-                and cell state, where the size of both states is
-                (batch, hidden_size).
-        Returns:
-            h_1, c_1: Tensors containing the next hidden and cell state.
-        """
+    def forward(self, input, hx=None):
+        # self.check_forward_input(input)
+        if hx is None:
+            hx = input.new_zeros(input.size(0), self.hidden_size, requires_grad=False)
+            hx = (hx, hx)
+        # self.check_forward_hidden(input, hx[0], '[0]')
+        # self.check_forward_hidden(input, hx[1], '[1]')
+        return self.LSTMCell_func(
+            input, hx,
+            self.weight_ih, self.weight_hh,
+            self.bias_ih, self.bias_hh,
+        )
 
-        h_0, c_0 = hx
-        batch_size = h_0.size(0)
-        bias_batch = (self.bias.unsqueeze(0)
-                      .expand(batch_size, *self.bias.size()))
-        wh_b = torch.addmm(bias_batch, h_0, self.weight_hh)
-        wi = torch.mm(input_, self.weight_ih)
-        net = wh_b + wi
-        f, i, o, g = torch.split(net, split_size=self.hidden_size, dim=1)
-        c_1 = torch.sigmoid(f) * c_0 + torch.sigmoid(i) * torch.tanh(g)
-        h_1 = torch.sigmoid(o) * torch.tanh(c_1)
-        return h_1, c_1
+    def LSTMCell_func(self, input, hidden, w_ih, w_hh, b_ih=None, b_hh=None):
+        hx, cx = hidden
+        gates = F.linear(input, w_ih, b_ih) + F.linear(hx, w_hh, b_hh)
+
+        # modified by Liu
+        if self.sparsity_ratio:
+            mask = topk_mask_gen(gates, 1 - self.sparsity_ratio)
+            assert mask.size() == gates.size()
+            # gates = gates * mask
+            # print('before mask: ', gates.nonzero().size(0))
+            gates = my_mask(gates, mask, training=True, inplace=True)
+            # print('after  mask: ', net.nonzero().size(0))
+
+        ingate, forgetgate, cellgate, outgate = gates.chunk(4, 1)
+
+        ingate = torch.sigmoid(ingate)
+        forgetgate = torch.sigmoid(forgetgate)
+        cellgate = torch.tanh(cellgate)
+        outgate = torch.sigmoid(outgate)
+
+        cy = (forgetgate * cx) + (ingate * cellgate)
+        hy = outgate * torch.tanh(cy)
+
+        return hy, cy
 
     def __repr__(self):
         s = '{name}({input_size}, {hidden_size})'
@@ -260,7 +183,7 @@ class LSTM(nn.Module):
         max_time = input_.size(0)
         output = []
         for time in range(max_time):
-            h_next, c_next = cell(input_=input_[time], hx=hx)
+            h_next, c_next = cell(input=input_[time], hx=hx)
             # mask = (time < length).float().unsqueeze(1).expand_as(h_next)
             # h_next = h_next*mask + hx[0]*(1 - mask)
             # c_next = c_next*mask + hx[1]*(1 - mask)
@@ -275,12 +198,12 @@ class LSTM(nn.Module):
             input_ = input_.transpose(0, 1)
         max_time, batch_size, _ = input_.size()
         if length is None:
-            length = Variable(torch.LongTensor([max_time] * batch_size))
+            length = torch.LongTensor([max_time] * batch_size)
             if input_.is_cuda:
                 device = input_.get_device()
                 length = length.cuda(device)
         if hx is None:
-            hx = Variable(input_.data.new(batch_size, self.hidden_size).zero_())
+            hx = input_.new_zeros(batch_size, self.hidden_size)
             hx = (hx, hx)
         h_n = []
         c_n = []

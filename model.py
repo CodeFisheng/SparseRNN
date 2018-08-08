@@ -1,24 +1,19 @@
 import torch.nn as nn
-from torch.autograd import Variable
-
 import building_block as bb
 
 class RNNModel(nn.Module):
     """Container module with an encoder, a recurrent module, and a decoder."""
 
     def __init__(self, rnn_type, ntoken, ninp, nhid, nlayers, dropout=0.5, 
-        tie_weights=False, sparsity_ratio=0.5):
+        tie_weights=False, sparsity_ratio=None):
         super(RNNModel, self).__init__()
         self.drop = nn.Dropout(dropout)
         self.encoder = nn.Embedding(ntoken, ninp)
         if rnn_type in ['LSTM', 'GRU']:
             self.rnn = getattr(nn, rnn_type)(ninp, nhid, nlayers, dropout=dropout)
-        elif rnn_type == 'Sparse_LSTM':
-            print("Using Sparse LSTM")
-            self.rnn = bb.LSTM(bb.SparseLSTMCell, ninp, nhid, nlayers, dropout=dropout,
-                sparsity_ratio=sparsity_ratio)
         elif rnn_type == 'MyLSTM':
-            self.rnn = bb.LSTM(bb.LSTMCell, ninp, nhid, nlayers, dropout=dropout)
+            self.rnn = bb.LSTM(bb.LSTMCell, ninp, nhid, nlayers, dropout=dropout,
+                sparsity_ratio=sparsity_ratio)
         else:
             try:
                 nonlinearity = {'RNN_TANH': 'tanh', 'RNN_RELU': 'relu'}[rnn_type]
@@ -48,7 +43,7 @@ class RNNModel(nn.Module):
     def init_weights(self):
         initrange = 0.1
         self.encoder.weight.data.uniform_(-initrange, initrange)
-        self.decoder.bias.data.fill_(0)
+        self.decoder.bias.data.zero_()
         self.decoder.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, input, hidden):
@@ -61,7 +56,7 @@ class RNNModel(nn.Module):
     def init_hidden(self, bsz):
         weight = next(self.parameters()).data
         if self.rnn_type in ['LSTM', 'Sparse_LSTM', 'MyLSTM']:
-            return (Variable(weight.new(self.nlayers, bsz, self.nhid).zero_()),
-                    Variable(weight.new(self.nlayers, bsz, self.nhid).zero_()))
+            return (weight.new_zeros(self.nlayers, bsz, self.nhid),
+                    weight.new_zeros(self.nlayers, bsz, self.nhid))
         else:
-            return Variable(weight.new(self.nlayers, bsz, self.nhid).zero_())
+            return weight.new_zeros(self.nlayers, bsz, self.nhid)

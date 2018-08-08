@@ -9,8 +9,8 @@ from torch.autograd import Variable
 import data
 import model
 
-parser = argparse.ArgumentParser(description='PyTorch PennTreeBank RNN/LSTM Language Model')
-parser.add_argument('--data', type=str, default='./data/penn',
+parser = argparse.ArgumentParser(description='PyTorch Wikitext-2 RNN/LSTM Language Model')
+parser.add_argument('--data', type=str, default='./data/wikitext-2',
                     help='location of the data corpus')
 parser.add_argument('--model', type=str, default='LSTM',
                     help='type of recurrent net (RNN_TANH, RNN_RELU, LSTM, Sparse_LSTM, GRU)')
@@ -32,7 +32,7 @@ parser.add_argument('--bptt', type=int, default=35,
                     help='sequence length')
 parser.add_argument('--dropout', type=float, default=0.2,
                     help='dropout applied to layers (0 = no dropout)')
-parser.add_argument('--sparsity', type=float, default=0.5,
+parser.add_argument('--sparsity', type=float, default=None,
                     help='sparsity enforced to net (0 = no sparsity)')
 parser.add_argument('--tied', action='store_true',
                     help='tie the word embedding and softmax weights')
@@ -54,9 +54,8 @@ torch.manual_seed(args.seed)
 if torch.cuda.is_available():
     if not args.cuda:
         print("WARNING: You have a CUDA device, so you should probably run with --cuda")
-    else:
-        torch.cuda.manual_seed(args.seed)
-
+    
+device = torch.device('cuda' if args.cuda else 'cpu')
 ###############################################################################
 # helper functions
 ###############################################################################
@@ -90,9 +89,7 @@ def batchify(data, bsz):
     data = data.narrow(0, 0, nbatch * bsz)
     # Evenly divide the data across the bsz batches.
     data = data.view(bsz, -1).t().contiguous()
-    if args.cuda:
-        data = data.cuda()
-    return data
+    return data.to(device)
 
 eval_batch_size = 10
 train_data = batchify(corpus.train, args.batch_size)
@@ -105,9 +102,7 @@ test_data = batchify(corpus.test, eval_batch_size)
 
 ntokens = len(corpus.dictionary)
 model = model.RNNModel(args.model, ntokens, args.emsize, args.nhid, args.nlayers, 
-    args.dropout, args.tied, args.sparsity)
-if args.cuda:
-    model.cuda()
+    args.dropout, args.tied, args.sparsity).to(device)
 
 criterion = nn.CrossEntropyLoss()
 
@@ -117,16 +112,16 @@ criterion = nn.CrossEntropyLoss()
 
 def repackage_hidden(h):
     """Wraps hidden states in new Variables, to detach them from their history."""
-    if type(h) == Variable:
-        return Variable(h.data)
+    if isinstance(h, torch.Tensor):
+        return h.detach()
     else:
         return tuple(repackage_hidden(v) for v in h)
 
 
-def get_batch(source, i, evaluation=False):
+def get_batch(source, i):
     seq_len = min(args.bptt, len(source) - 1 - i)
-    data = Variable(source[i:i+seq_len], volatile=evaluation)
-    target = Variable(source[i+1:i+1+seq_len].view(-1))
+    data = source[i:i+seq_len]
+    target = source[i+1:i+1+seq_len].view(-1)
     return data, target
 
 
@@ -136,13 +131,14 @@ def evaluate(data_source):
     total_loss = 0
     ntokens = len(corpus.dictionary)
     hidden = model.init_hidden(eval_batch_size)
-    for i in range(0, data_source.size(0) - 1, args.bptt):
-        data, targets = get_batch(data_source, i, evaluation=True)
-        output, hidden = model(data, hidden)
-        output_flat = output.view(-1, ntokens)
-        total_loss += len(data) * criterion(output_flat, targets).data
-        hidden = repackage_hidden(hidden)
-    return total_loss[0] / len(data_source)
+    with torch.no_grad():
+        for i in range(0, data_source.size(0) - 1, args.bptt):
+            data, targets = get_batch(data_source, i)
+            output, hidden = model(data, hidden)
+            output_flat = output.view(-1, ntokens)
+            total_loss += len(data) * criterion(output_flat, targets).item()
+            hidden = repackage_hidden(hidden)
+    return total_loss / len(data_source)
 
 
 def train():
@@ -168,11 +164,11 @@ def train():
         for p in model.parameters():
             p.data.add_(-lr, p.grad.data)
 
-        total_loss += loss.data
-        batch_loss.update(loss.data[0], data.size(0)) 
+        total_loss += loss.item()
+        batch_loss.update(loss.item(), data.size(0)) 
 
         if batch % args.log_interval == 0 and batch > 0:
-            cur_loss = total_loss[0] / args.log_interval
+            cur_loss = total_loss / args.log_interval
             elapsed = time.time() - start_time
             print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | '
                     'loss {:5.2f} | ppl {:8.2f}'.format(
@@ -215,15 +211,16 @@ except KeyboardInterrupt:
     print('-' * 89)
     print('Exiting from training early')
 
-f = open(args.plot, 'w')
-json.dump({'training loss': loss_plt['train'],
-       'validation loss': loss_plt['val']}, f)
-# json.dump({'training loss': loss_plt['train']}, f)
-f.close()
+# f = open(args.plot, 'w')
+# json.dump({'training loss': loss_plt['train'],
+#        'validation loss': loss_plt['val']}, f)
+# # json.dump({'training loss': loss_plt['train']}, f)
+# f.close()
 
 # Load the best saved model.
 with open(args.save, 'rb') as f:
     model = torch.load(f)
+    # model.rnn.flatten_parameters()
 
 # Run on test data.
 test_loss = evaluate(test_data)
@@ -237,5 +234,4 @@ f = open(args.plot, 'w')
 json.dump({'train loss': loss_plt['train'],
        'valid loss': loss_plt['val'],
        'test loss': loss_plt['test']}, f)
-# json.dump({'training loss': loss_plt['train']}, f)
 f.close()
