@@ -118,17 +118,18 @@ class LSTMCell(nn.Module):
     def LSTMCell_func(self, input, hidden, w_ih, w_hh, b_ih=None, b_hh=None):
         hx, cx = hidden
         gates = F.linear(input, w_ih, b_ih) + F.linear(hx, w_hh, b_hh)
+        ingate, forgetgate, cellgate, outgate = gates.chunk(4, 1)
 
         # modified by Liu
         if self.sparsity_ratio:
             mask = topk_mask_gen(gates, 1 - self.sparsity_ratio)
             assert mask.size() == gates.size()
+            gates.data.mul_(mask)
             # gates = gates * mask
             # print('before mask: ', gates.nonzero().size(0))
-            gates = my_mask(gates, mask, training=True, inplace=True)
+            # gates = my_mask(gates, mask, training=True, inplace=True)
             # print('after  mask: ', net.nonzero().size(0))
 
-        ingate, forgetgate, cellgate, outgate = gates.chunk(4, 1)
 
         ingate = torch.sigmoid(ingate)
         forgetgate = torch.sigmoid(forgetgate)
